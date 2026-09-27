@@ -209,6 +209,28 @@ describe('runCoverageAudit', () => {
     expect(report.maxSteps[0].sim?.steps).toHaveLength(20);
   });
 
+  it('恰好 20 步重写后无命中：正常终止，不归入 maxSteps', () => {
+    // 链式 20 条：/p0 -> ... -> /p20，/p20 没有任何规则命中
+    const raw: Rule[] = [];
+    for (let i = 0; i < 20; i++) {
+      raw.push(
+        rule({
+          id: `r${i}`,
+          name: `r${i}`,
+          host: 'a.example.com',
+          pathTemplate: `/p${i}`,
+          action: { type: 'rewrite', target: `/p${i + 1}`, status: 302 },
+        }),
+      );
+    }
+    const samples = parseSamples('GET http://a.example.com/p0');
+    const report = runCoverageAudit(samples, raw);
+    expect(report.maxSteps).toHaveLength(0);
+    expect(report.results[0].status).toBe('final');
+    expect(report.results[0].sim?.steps).toHaveLength(20);
+    expect(report.results[0].sim?.finalUrl).toBe('http://a.example.com/p20');
+  });
+
   it('完全相同的样本按多条独立请求计数', () => {
     const rules = [
       rule({

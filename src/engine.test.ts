@@ -317,6 +317,59 @@ describe('simulate', () => {
     expect(sim.steps).toHaveLength(MAX_STEPS);
   });
 
+  it(`恰好 ${MAX_STEPS} 步重写后无规则命中：正常终止并给出最终 URL，不误报超限`, () => {
+    // 20 条链式 rewrite：/s0 -> /s1 -> ... -> /s20，/s20 没有任何规则命中
+    const rules: Rule[] = Array.from({ length: MAX_STEPS }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    const sim = simulate(rules, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('final');
+    expect(sim.ok).toBe(true);
+    expect(sim.finalUrl).toBe(`http://example.com/s${MAX_STEPS}`);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
+  it(`恰好 ${MAX_STEPS} 步重写后状态重复：判定循环而非超限`, () => {
+    // 20 条链式 rewrite，第 20 步绕回起点：/s0 -> ... -> /s19 -> /s0
+    const rules: Rule[] = Array.from({ length: MAX_STEPS }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: {
+          type: 'rewrite',
+          target: i + 1 === MAX_STEPS ? '/s0' : `/s${i + 1}`,
+          status: 302,
+        },
+      }),
+    );
+    const sim = simulate(rules, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('loop');
+    expect(sim.ok).toBe(false);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
+  it(`恰好 ${MAX_STEPS} 步后仍有规则命中：需要第 ${MAX_STEPS + 1} 步才判超限`, () => {
+    // 21 条链式 rewrite：第 20 步落到 /s20 仍命中 r20，必须执行第 21 步 => 超限
+    const rules: Rule[] = Array.from({ length: MAX_STEPS + 1 }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    const sim = simulate(rules, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('max-steps');
+    expect(sim.ok).toBe(false);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
   it('非法输入 URL 直接失败', () => {
     const sim = simulate([], 'GET', 'not a url');
     expect(sim.status).toBe('invalid-url');
