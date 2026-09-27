@@ -12,7 +12,8 @@
 //
 // 语义与调试台引擎一致：首条命中生效；rewrite 应用后从第一条规则重新匹配；
 // 路径模板 :name 捕获并替换进目标；查询参数条件按 AND 组合（存在 / 不存在 / 值等于）；
-// 以「方法 + URL」为状态键检测循环；最多执行 20 步。
+// 以「方法 + URL」为状态键检测循环；最多执行 20 步——第 20 步重写后仍检查新状态，
+// 无命中即正常终止、状态重复判循环，只有仍有规则命中才判超限。
 
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -147,7 +148,9 @@ function fail(status, steps, reason) {
  * 1. 每步先计算状态键（方法 + URL API 序列化结果），重复即判循环；
  * 2. 从第一条规则开始找首个命中；
  * 3. rewrite 应用后回到第 1 步重新匹配；redirect / stop 立即终止；
- * 4. 最多执行 MAX_STEPS 步，超限判失败。
+ * 4. 最多执行 MAX_STEPS 步。第 MAX_STEPS 步重写后仍检查新状态：无命中即成功终止、
+ *    状态重复判循环；只有仍有规则命中（还需第 MAX_STEPS + 1 步）才判超限，
+ *    轨迹始终至多保留 MAX_STEPS 条。
  */
 function simulate(rules, method, inputUrl) {
   const steps = [];
@@ -162,7 +165,7 @@ function simulate(rules, method, inputUrl) {
 
   const seen = new Set();
 
-  for (let n = 1; n <= MAX_STEPS; n++) {
+  for (let n = 1; ; n++) {
     const stateKey = `${m} ${url.toString()}`;
     if (seen.has(stateKey)) {
       return fail(
@@ -185,6 +188,16 @@ function simulate(rules, method, inputUrl) {
             : '没有更多规则命中，以当前 URL 作为最终结果',
         finalUrl: url.toString(),
       };
+    }
+
+    // 已执行 MAX_STEPS 步后仍有规则命中：还需第 MAX_STEPS + 1 步才判超限，
+    // 该命中不进入轨迹（轨迹至多 MAX_STEPS 条）
+    if (n > MAX_STEPS) {
+      return fail(
+        'max-steps',
+        steps,
+        `已执行 ${MAX_STEPS} 步仍未终止，判定为潜在循环，不予返回成功结果`,
+      );
     }
 
     const { rule, index, params } = match;
@@ -240,12 +253,6 @@ function simulate(rules, method, inputUrl) {
     steps.push(step);
     url = next;
   }
-
-  return fail(
-    'max-steps',
-    steps,
-    `已执行 ${MAX_STEPS} 步仍未终止，判定为潜在循环，不予返回成功结果`,
-  );
 }
 
 /**

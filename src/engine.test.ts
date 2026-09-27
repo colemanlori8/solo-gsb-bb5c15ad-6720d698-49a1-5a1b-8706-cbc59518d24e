@@ -317,6 +317,91 @@ describe('simulate', () => {
     expect(sim.steps).toHaveLength(MAX_STEPS);
   });
 
+  it(`恰好 ${MAX_STEPS} 次重写后到达无命中 URL：成功终止并给出最终 URL`, () => {
+    // 20 条链式 rewrite：/s0 -> /s1 -> ... -> /s20，/s20 无任何规则命中
+    const rules: Rule[] = Array.from({ length: MAX_STEPS }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    const sim = simulate(rules, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('final');
+    expect(sim.ok).toBe(true);
+    expect(sim.finalUrl).toBe(`http://example.com/s${MAX_STEPS}`);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
+  it(`第 ${MAX_STEPS} 步重写后落到已见状态：判循环而非超限`, () => {
+    // 19 条链式 rewrite 后，最后一条把 /s19 重写回已见的 /s0
+    const rules: Rule[] = Array.from({ length: MAX_STEPS - 1 }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    rules.push(
+      rule({
+        id: 'back',
+        pathTemplate: `/s${MAX_STEPS - 1}`,
+        query: [],
+        action: { type: 'rewrite', target: '/s0', status: 302 },
+      }),
+    );
+    const sim = simulate(rules, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('loop');
+    expect(sim.ok).toBe(false);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
+  it(`第 ${MAX_STEPS} 步命中重定向 / 停止：正常终止不判超限`, () => {
+    // 19 条链式 rewrite 后，第 20 步命中重定向规则
+    const chain: Rule[] = Array.from({ length: MAX_STEPS - 1 }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    const redirect = simulate(
+      [
+        ...chain,
+        rule({
+          id: 'rd',
+          pathTemplate: `/s${MAX_STEPS - 1}`,
+          query: [],
+          action: { type: 'redirect', target: 'https://new.example.com/done', status: 301 },
+        }),
+      ],
+      'GET',
+      'http://example.com/s0',
+    );
+    expect(redirect.status).toBe('redirect');
+    expect(redirect.redirectLocation).toBe('https://new.example.com/done');
+    expect(redirect.steps).toHaveLength(MAX_STEPS);
+
+    const stopped = simulate(
+      [
+        ...chain,
+        rule({
+          id: 'st',
+          pathTemplate: `/s${MAX_STEPS - 1}`,
+          query: [],
+          action: { type: 'stop', target: '', status: 302 },
+        }),
+      ],
+      'GET',
+      'http://example.com/s0',
+    );
+    expect(stopped.status).toBe('stopped');
+    expect(stopped.steps).toHaveLength(MAX_STEPS);
+  });
+
   it('非法输入 URL 直接失败', () => {
     const sim = simulate([], 'GET', 'not a url');
     expect(sim.status).toBe('invalid-url');

@@ -213,6 +213,51 @@ describe('生成物与引擎语义一致', () => {
     expect(sim.steps).toHaveLength(MAX_STEPS);
   });
 
+  it(`恰好 ${MAX_STEPS} 次重写后到达无命中 URL：成功终止并给出最终 URL`, async () => {
+    // 20 条链式 rewrite：/s0 -> /s1 -> ... -> /s20，/s20 无任何规则命中
+    const rules: Rule[] = Array.from({ length: MAX_STEPS }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    const route = await loadRoute(rules);
+    const sim = route('GET', 'http://example.com/s0');
+    expectSameAsEngine(rules, sim, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('final');
+    expect(sim.ok).toBe(true);
+    expect(sim.finalUrl).toBe(`http://example.com/s${MAX_STEPS}`);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
+  it(`第 ${MAX_STEPS} 步重写后落到已见状态：判循环而非超限`, async () => {
+    // 19 条链式 rewrite 后，最后一条把 /s19 重写回已见的 /s0
+    const rules: Rule[] = Array.from({ length: MAX_STEPS - 1 }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    rules.push(
+      rule({
+        id: 'back',
+        pathTemplate: `/s${MAX_STEPS - 1}`,
+        query: [],
+        action: { type: 'rewrite', target: '/s0', status: 302 },
+      }),
+    );
+    const route = await loadRoute(rules);
+    const sim = route('GET', 'http://example.com/s0');
+    expectSameAsEngine(rules, sim, 'GET', 'http://example.com/s0');
+    expect(sim.status).toBe('loop');
+    expect(sim.ok).toBe(false);
+    expect(sim.steps).toHaveLength(MAX_STEPS);
+  });
+
   it('非法输入 URL 与非法动作目标', async () => {
     const rules = [
       rule({ id: 'r1', pathTemplate: '/a', action: { type: 'redirect', target: 'http://', status: 302 } }),
@@ -349,6 +394,25 @@ describe('CLI：node route-bundle.mjs METHOD URL', () => {
     const out = JSON.parse(res.stdout) as Simulation;
     expect(out.status).toBe('loop');
     expect(out.ok).toBe(false);
+  });
+
+  it(`恰好 ${MAX_STEPS} 次重写后到达无命中 URL：退出码为 0 且结果为 final`, () => {
+    const rules: Rule[] = Array.from({ length: MAX_STEPS }, (_, i) =>
+      rule({
+        id: `r${i}`,
+        pathTemplate: `/s${i}`,
+        query: [],
+        action: { type: 'rewrite', target: `/s${i + 1}`, status: 302 },
+      }),
+    );
+    const file = writeBundle(rules);
+    const res = runCli(file, ['GET', 'http://example.com/s0']);
+    expect(res.code).toBe(0);
+    const out = JSON.parse(res.stdout) as Simulation;
+    expect(out.status).toBe('final');
+    expect(out.ok).toBe(true);
+    expect(out.finalUrl).toBe(`http://example.com/s${MAX_STEPS}`);
+    expect(out.steps).toHaveLength(MAX_STEPS);
   });
 
   it('缺少参数时打印用法并退出码为 1', () => {

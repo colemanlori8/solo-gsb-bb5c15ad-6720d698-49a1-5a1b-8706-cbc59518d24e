@@ -197,6 +197,54 @@ describe('暂停不重置循环检测与 20 步上限', () => {
     expect(s.result?.steps.length).toBe(MAX_STEPS);
   });
 
+  it(`恰好 ${MAX_STEPS} 次重写后无命中：单步推进到底判 final 而非超限`, () => {
+    // 20 条链式 rewrite：/p0 -> ... -> /p20，/p20 无任何规则命中
+    const rules: Rule[] = [];
+    for (let i = 0; i < MAX_STEPS; i++) {
+      rules.push(rewrite(`r${i}`, `/p${i}`, `/p${i + 1}`));
+    }
+    const s = session(rules, ['r0'], 'http://example.com/p0');
+    for (let i = 0; i < MAX_STEPS; i++) {
+      expect(s.finished).toBe(false);
+      s.step();
+    }
+    expect(s.finished).toBe(true);
+    expect(s.result?.status).toBe('final');
+    expect(s.result?.finalUrl).toBe(`http://example.com/p${MAX_STEPS}`);
+    expect(s.result?.steps.length).toBe(MAX_STEPS);
+  });
+
+  it(`恰好 ${MAX_STEPS} 次重写后无命中：继续运行到底同样判 final`, () => {
+    const rules: Rule[] = [];
+    for (let i = 0; i < MAX_STEPS; i++) {
+      rules.push(rewrite(`r${i}`, `/p${i}`, `/p${i + 1}`));
+    }
+    const s = session(rules, ['r0'], 'http://example.com/p0');
+    expect(s.pending?.rule.id).toBe('r0');
+    s.resume();
+    expect(s.finished).toBe(true);
+    expect(s.result?.status).toBe('final');
+    expect(s.result?.finalUrl).toBe(`http://example.com/p${MAX_STEPS}`);
+    expect(s.result?.steps.length).toBe(MAX_STEPS);
+  });
+
+  it(`第 ${MAX_STEPS} 步重写后落到已见状态：跨暂停判循环而非超限`, () => {
+    // 19 条链式 rewrite 后，最后一条把 /p19 重写回已见的 /p0
+    const rules: Rule[] = [];
+    for (let i = 0; i < MAX_STEPS - 1; i++) {
+      rules.push(rewrite(`r${i}`, `/p${i}`, `/p${i + 1}`));
+    }
+    rules.push(rewrite('back', `/p${MAX_STEPS - 1}`, '/p0'));
+    const s = session(rules, ['r0'], 'http://example.com/p0');
+    for (let i = 0; i < MAX_STEPS; i++) {
+      expect(s.finished).toBe(false);
+      s.step();
+    }
+    expect(s.finished).toBe(true);
+    expect(s.result?.status).toBe('loop');
+    expect(s.result?.steps.length).toBe(MAX_STEPS);
+  });
+
   it('同一会话单步与继续混用，轨迹与一次跑完完全一致', () => {
     const rules = [
       rewrite('r1', '/a', '/b'),

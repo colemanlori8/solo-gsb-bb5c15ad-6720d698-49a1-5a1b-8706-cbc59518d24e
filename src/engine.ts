@@ -139,7 +139,9 @@ function fail(status: Simulation['status'], steps: Step[], reason: string): Simu
  * 2. 从第一条规则开始找首个命中；
  * 3. 命中后、动作执行前 yield 该步骤——调用方可在此暂停（断点 / 单步）；
  * 4. 恢复后执行动作：rewrite 应用后回到第 1 步重新匹配；redirect / stop 立即终止；
- * 5. 最多执行 MAX_STEPS 步，超限判失败。
+ * 5. 最多执行 MAX_STEPS 步。第 MAX_STEPS 步重写后仍检查新状态：无命中即成功终止、
+ *    状态重复判循环；只有仍有规则命中（还需第 MAX_STEPS + 1 步）才判超限，
+ *    轨迹始终至多保留 MAX_STEPS 条。
  *
  * 暂停只停在 yield 点：seen 循环检测状态、步数计数与当前 URL 都保存在生成器闭包中，
  * 恢复执行时原样沿用，不会因暂停重置。
@@ -161,7 +163,7 @@ export function* runSimulation(
 
   const seen = new Set<string>();
 
-  for (let n = 1; n <= MAX_STEPS; n++) {
+  for (let n = 1; ; n++) {
     const stateKey = `${m} ${url.toString()}`;
     if (seen.has(stateKey)) {
       return fail(
@@ -184,6 +186,16 @@ export function* runSimulation(
             : '没有更多规则命中，以当前 URL 作为最终结果',
         finalUrl: url.toString(),
       };
+    }
+
+    // 已执行 MAX_STEPS 步后仍有规则命中：还需第 MAX_STEPS + 1 步才判超限，
+    // 该命中不进入轨迹（轨迹至多 MAX_STEPS 条）
+    if (n > MAX_STEPS) {
+      return fail(
+        'max-steps',
+        steps,
+        `已执行 ${MAX_STEPS} 步仍未终止，判定为潜在循环，不予返回成功结果`,
+      );
     }
 
     const { rule, index, params } = match;
@@ -238,12 +250,6 @@ export function* runSimulation(
     step.urlAfter = next.toString();
     url = next;
   }
-
-  return fail(
-    'max-steps',
-    steps,
-    `已执行 ${MAX_STEPS} 步仍未终止，判定为潜在循环，不予返回成功结果`,
-  );
 }
 
 /**
